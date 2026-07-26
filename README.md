@@ -20,7 +20,7 @@ cd mp3
 > Apple : accepte, c'est normal.
 
 Ensuite, tu peux relancer l'interface d'un simple **double-clic** sur
-`Installer-mac.command` (ou `Lancer.command`).
+`Installer-mac.command` (ou `run.command`, qui lance sans réinstaller).
 
 ### Méthode ZIP (téléchargement depuis GitHub)
 
@@ -46,7 +46,8 @@ l'interface dans ton navigateur. Colle tes liens → **Installer** → le ZIP se
 
 ## Utilisation
 
-- **Interface web** : `./Installer-mac.command` (ou `python3 app.py`) → ouvre la page.
+- **Interface web** : `./run.command` (ou `python3 app.py`) → ouvre la page.
+  La première fois seulement, utilise `./Installer-mac.command` pour tout installer.
 - **En ligne de commande** : `./mp3dl.sh` puis colle les liens, Entrée, Ctrl-D.
 
 Les MP3 arrivent dans le dossier `download/`.
