@@ -47,6 +47,10 @@ URL_RE = re.compile(r"https?://[^\s;,\"']+")
 # Récupère le chemin du mp3 final dans la sortie de yt-dlp
 DEST_RE = re.compile(r"\[ExtractAudio\] Destination: (.+\.mp3)$")
 ALREADY_RE = re.compile(r"\[download\] (.+\.mp3) has already been downloaded")
+# Suivi de progression
+ITEM_RE = re.compile(r"Downloading item (\d+) of (\d+)")      # playlists : N sur M
+PCT_RE = re.compile(r"\[download\]\s+([\d.]+)% of")           # % du morceau en cours
+DLDEST_RE = re.compile(r"\[download\] Destination: (.+)$")    # nom du morceau en cours
 
 # Stocke les zip prêts : token -> chemin du fichier zip
 ZIPS = {}
@@ -84,6 +88,23 @@ PAGE = """<!doctype html>
   button.zip:hover { background: #2cc06b; }
   button.zip.show { display: inline-block; }
   .count { color: #8b93a1; font-size: 13px; }
+  .progress { margin-top: 24px; display: none; }
+  .progress.show { display: block; }
+  .pbar {
+    height: 16px; background: #171a21; border: 1px solid #2a2f3a;
+    border-radius: 999px; overflow: hidden;
+  }
+  .pfill {
+    height: 100%; width: 0%; border-radius: 999px;
+    background: linear-gradient(90deg, #4f7cff, #37d67a);
+    transition: width .3s ease;
+  }
+  .pmeta {
+    display: flex; justify-content: space-between; gap: 12px;
+    margin-top: 10px; font-size: 13.5px;
+  }
+  .pcount { font-weight: 600; }
+  .pcur { color: #8b93a1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
   .log {
     margin-top: 24px; background: #0a0c10; border: 1px solid #2a2f3a;
     border-radius: 12px; padding: 16px; font-family: ui-monospace, Menlo, monospace;
@@ -109,6 +130,13 @@ https://www.youtube.com/watch?v=biYdUZXfz9I ; https://youtu.be/q-3qus2pvJM"></te
       <span class="count" id="count"></span>
     </div>
     <p class="hint">Séparateurs acceptés : retour à la ligne, <code>;</code>, virgule, espace, « ou ». Les playlists entières sont téléchargées.</p>
+    <div class="progress" id="prog">
+      <div class="pbar"><div class="pfill" id="pfill"></div></div>
+      <div class="pmeta">
+        <span class="pcount" id="pcount">0 / 0 installées</span>
+        <span class="pcur" id="pcur"></span>
+      </div>
+    </div>
     <div class="log" id="log"></div>
   </div>
 <script>
@@ -117,9 +145,23 @@ const btn = document.getElementById('go');
 const zipBtn = document.getElementById('zip');
 const log = document.getElementById('log');
 const count = document.getElementById('count');
+const prog = document.getElementById('prog');
+const pfill = document.getElementById('pfill');
+const pcount = document.getElementById('pcount');
+const pcur = document.getElementById('pcur');
 let zipUrl = null;
 
 function findUrls(t){ return (t.match(/https?:\\/\\/[^\\s;,"']+/g) || []); }
+
+function updateProgress(done, total, pct, title){
+  prog.className = 'progress show';
+  const t = total > 0 ? total : 1;
+  // progression globale = morceaux finis + fraction du morceau en cours
+  const overall = Math.min(100, ((done + (pct/100)) / t) * 100);
+  pfill.style.width = overall.toFixed(1) + '%';
+  pcount.textContent = done + ' / ' + total + ' installées';
+  pcur.textContent = title ? (pct < 100 && pct > 0 ? title + ' · ' + pct + '%' : title) : '';
+}
 
 ta.addEventListener('input', () => {
   const n = findUrls(ta.value).length;
@@ -142,6 +184,8 @@ btn.addEventListener('click', async () => {
   btn.disabled = true; btn.textContent = 'Téléchargement...';
   zipBtn.className = 'zip'; zipUrl = null;
   log.className = 'log show'; log.innerHTML = '';
+  prog.className = 'progress'; pfill.style.width = '0%';
+  pcount.textContent = '0 / 0 installées'; pcur.textContent = '';
   line('Démarrage de ' + urls.length + ' lien(s)...', 'info');
 
   try {
@@ -171,6 +215,12 @@ btn.addEventListener('click', async () => {
           }
           continue;
         }
+        if (p.startsWith('##PROG##')){
+          const parts2 = p.slice(8).split('|');
+          updateProgress(parseInt(parts2[0])||0, parseInt(parts2[1])||0,
+                         parseInt(parts2[2])||0, parts2[3]||'');
+          continue;
+        }
         if (p.startsWith('##NONE##')){ line('Aucun nouveau fichier à zipper.', 'info'); continue; }
         let cls = '';
         if (p.startsWith('[ExtractAudio]') || p.includes('has already been downloaded')) cls = 'done';
@@ -178,6 +228,7 @@ btn.addEventListener('click', async () => {
         line(p, cls);
       }
     }
+    if (prog.classList.contains('show')){ pfill.style.width = '100%'; pcur.textContent = ''; }
     line('✅ Terminé. Fichiers dans le dossier download.', 'done');
   } catch(e){
     line('Erreur : ' + e.message, 'err');
@@ -284,19 +335,68 @@ class Handler(http.server.BaseHTTPRequestHandler):
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1
         )
+
+        # État de progression
+        total = len(urls)   # au minimum le nombre de liens ; ajusté si playlist
+        done = 0            # morceaux terminés
+        cur_title = ""      # nom du morceau en cours
+        cur_pct = 0         # % de téléchargement du morceau en cours
+        last_sent = -1      # dernier % envoyé (throttle)
+
+        def send(text):
+            self.wfile.write(text.encode("utf-8", "replace"))
+            self.wfile.flush()
+
+        def emit_prog():
+            name = os.path.splitext(os.path.basename(cur_title))[0]  # sans extension
+            name = name.replace("|", "-")  # évite de casser le séparateur du message
+            send(f"##PROG##{done}|{total}|{int(cur_pct)}|{name}\n")
+
         try:
             for out_line in iter(proc.stdout.readline, ""):
                 out_line = out_line.rstrip("\n")
-                m = DEST_RE.search(out_line) or ALREADY_RE.search(out_line)
-                if m:
-                    produced.add(m.group(1))
+
+                # Playlist : "Downloading item N of M" -> total = M
+                mi = ITEM_RE.search(out_line)
+                if mi:
+                    total = max(total, int(mi.group(2)))
+                    emit_prog()
+
+                # Nouveau morceau en cours de téléchargement
+                md = DLDEST_RE.search(out_line)
+                if md and not md.group(1).endswith(".mp3"):
+                    cur_title = md.group(1)
+                    cur_pct = 0
+                    last_sent = -1
+                    emit_prog()
+
+                # % de téléchargement du morceau en cours (throttlé au %)
+                mp = PCT_RE.search(out_line)
+                if mp:
+                    cur_pct = float(mp.group(1))
+                    if int(cur_pct) != last_sent:
+                        last_sent = int(cur_pct)
+                        emit_prog()
+                    continue  # ne pas polluer le log avec les lignes de %
+
+                # Morceau terminé (converti en mp3, ou déjà présent)
+                mfin = DEST_RE.search(out_line) or ALREADY_RE.search(out_line)
+                if mfin:
+                    produced.add(mfin.group(1))
+                    done += 1
+                    cur_pct = 100
+                    if done > total:
+                        total = done
+                    emit_prog()
+
                 try:
-                    self.wfile.write((out_line + "\n").encode("utf-8", "replace"))
-                    self.wfile.flush()
+                    send(out_line + "\n")
                 except (BrokenPipeError, ConnectionResetError):
                     proc.kill()
                     break
             proc.wait()
+        except (BrokenPipeError, ConnectionResetError):
+            proc.kill()
         finally:
             if proc.stdout:
                 proc.stdout.close()
