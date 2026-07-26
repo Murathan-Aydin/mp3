@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""
+Interface web locale pour télécharger des musiques YouTube en MP3.
+
+Lancer :  python3 app.py
+Puis ouvrir http://localhost:8756 dans le navigateur.
+
+Colle un ou plusieurs liens (séparés par ; , espace, retour à la ligne, "ou"…),
+clique sur « Installer ». Playlist -> tout est téléchargé ; musique seule -> juste elle.
+Les MP3 arrivent dans ./download, et un ZIP de la session est proposé au téléchargement.
+"""
+import http.server
+import socketserver
+import os
+import re
+import subprocess
+import threading
+import json
+import zipfile
+import tempfile
+import uuid
+import datetime
+from urllib.parse import urlparse, parse_qs
+
+import sys
+
+HOST = os.environ.get("HOST", "127.0.0.1")   # 0.0.0.0 en conteneur (voir docker-compose)
+PORT = int(os.environ.get("PORT", "8756"))
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEST = os.environ.get("DOWNLOAD_DIR", os.path.join(HERE, "download"))
+
+YTDLP_FLAGS = [
+    "--extract-audio",
+    "--audio-format", "mp3",
+    "--audio-quality", "0",
+    "--embed-thumbnail",
+    "--add-metadata",
+    "--embed-metadata",
+    "--ignore-errors",
+    "--continue",
+    "--no-overwrites",
+    "--newline",
+    "--output", os.path.join(DEST, "%(title)s.%(ext)s"),
+]
+
+URL_RE = re.compile(r"https?://[^\s;,\"']+")
+# Récupère le chemin du mp3 final dans la sortie de yt-dlp
+DEST_RE = re.compile(r"\[ExtractAudio\] Destination: (.+\.mp3)$")
+ALREADY_RE = re.compile(r"\[download\] (.+\.mp3) has already been downloaded")
+
+# Stocke les zip prêts : token -> chemin du fichier zip
+ZIPS = {}
+
+PAGE = """<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MP3 Downloader</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0; background: #0f1115; color: #e6e8eb;
+    display: flex; justify-content: center; min-height: 100vh;
+  }
+  .wrap { width: 100%; max-width: 720px; padding: 40px 24px; }
+  h1 { font-size: 26px; font-weight: 700; margin: 0 0 6px; }
+  .sub { color: #8b93a1; margin: 0 0 28px; font-size: 14px; }
+  textarea {
+    width: 100%; min-height: 130px; resize: vertical; padding: 14px 16px;
+    border-radius: 12px; border: 1px solid #2a2f3a; background: #171a21;
+    color: #e6e8eb; font-size: 14px; line-height: 1.6; font-family: inherit;
+  }
+  textarea:focus { outline: none; border-color: #4f7cff; }
+  .row { display: flex; gap: 12px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+  button {
+    background: #4f7cff; color: #fff; border: none; padding: 13px 26px;
+    border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+  button:hover { background: #3d67e6; }
+  button:disabled { background: #2a2f3a; color: #6b7280; cursor: not-allowed; }
+  button.zip { background: #37d67a; color: #08240f; display: none; }
+  button.zip:hover { background: #2cc06b; }
+  button.zip.show { display: inline-block; }
+  .count { color: #8b93a1; font-size: 13px; }
+  .log {
+    margin-top: 24px; background: #0a0c10; border: 1px solid #2a2f3a;
+    border-radius: 12px; padding: 16px; font-family: ui-monospace, Menlo, monospace;
+    font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+    max-height: 340px; overflow-y: auto; display: none;
+  }
+  .log.show { display: block; }
+  .done { color: #37d67a; } .err { color: #ff6b6b; } .info { color: #8b93a1; }
+  .hint { margin-top: 14px; font-size: 12.5px; color: #6b7280; }
+  code { background: #171a21; padding: 2px 6px; border-radius: 5px; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🎵 MP3 Downloader</h1>
+    <p class="sub">Colle tes liens YouTube et clique sur Installer. Playlist entière ou musique seule. Un ZIP est créé à la fin.</p>
+    <textarea id="links" placeholder="Colle ici un ou plusieurs liens...
+Exemple :
+https://www.youtube.com/watch?v=biYdUZXfz9I ; https://youtu.be/q-3qus2pvJM"></textarea>
+    <div class="row">
+      <button id="go">Installer</button>
+      <button id="zip" class="zip">⬇︎ Télécharger le ZIP</button>
+      <span class="count" id="count"></span>
+    </div>
+    <p class="hint">Séparateurs acceptés : retour à la ligne, <code>;</code>, virgule, espace, « ou ». Les playlists entières sont téléchargées.</p>
+    <div class="log" id="log"></div>
+  </div>
+<script>
+const ta = document.getElementById('links');
+const btn = document.getElementById('go');
+const zipBtn = document.getElementById('zip');
+const log = document.getElementById('log');
+const count = document.getElementById('count');
+let zipUrl = null;
+
+function findUrls(t){ return (t.match(/https?:\\/\\/[^\\s;,"']+/g) || []); }
+
+ta.addEventListener('input', () => {
+  const n = findUrls(ta.value).length;
+  count.textContent = n ? n + ' lien(s) détecté(s)' : '';
+});
+
+function line(txt, cls){
+  const d = document.createElement('div');
+  if (cls) d.className = cls;
+  d.textContent = txt;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+zipBtn.addEventListener('click', () => { if (zipUrl) window.location = zipUrl; });
+
+btn.addEventListener('click', async () => {
+  const urls = findUrls(ta.value);
+  if (!urls.length){ alert('Aucun lien détecté.'); return; }
+  btn.disabled = true; btn.textContent = 'Téléchargement...';
+  zipBtn.className = 'zip'; zipUrl = null;
+  log.className = 'log show'; log.innerHTML = '';
+  line('Démarrage de ' + urls.length + ' lien(s)...', 'info');
+
+  try {
+    const res = await fetch('/download', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({urls})
+    });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true){
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      const parts = buf.split('\\n');
+      buf = parts.pop();
+      for (const p of parts){
+        if (!p) continue;
+        if (p.startsWith('##ZIP##')){
+          const tok = p.slice(7).trim();
+          if (tok){
+            zipUrl = '/get-zip?token=' + encodeURIComponent(tok);
+            zipBtn.className = 'zip show';
+            line('📦 ZIP prêt — téléchargement...', 'done');
+            window.location = zipUrl;   // déclenche le téléchargement du zip
+          }
+          continue;
+        }
+        if (p.startsWith('##NONE##')){ line('Aucun nouveau fichier à zipper.', 'info'); continue; }
+        let cls = '';
+        if (p.startsWith('[ExtractAudio]') || p.includes('has already been downloaded')) cls = 'done';
+        else if (p.toLowerCase().includes('error')) cls = 'err';
+        line(p, cls);
+      }
+    }
+    line('✅ Terminé. Fichiers dans le dossier download.', 'done');
+  } catch(e){
+    line('Erreur : ' + e.message, 'err');
+  }
+  btn.disabled = false; btn.textContent = 'Installer';
+});
+</script>
+</body>
+</html>"""
+
+
+def make_zip(files):
+    """Crée un zip des fichiers donnés, renvoie (token, chemin) ou (None, None)."""
+    files = [f for f in files if f and os.path.isfile(f)]
+    if not files:
+        return None, None
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    zpath = os.path.join(tempfile.gettempdir(), f"musiques_{stamp}.zip")
+    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_STORED) as z:
+        for f in files:
+            z.write(f, arcname=os.path.basename(f))
+    token = uuid.uuid4().hex
+    ZIPS[token] = zpath
+    return token, zpath
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass  # silence les logs par requête
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path in ("/", "/index.html"):
+            body = PAGE.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif parsed.path == "/get-zip":
+            qs = parse_qs(parsed.query)
+            token = (qs.get("token") or [""])[0]
+            zpath = ZIPS.get(token)
+            if not zpath or not os.path.isfile(zpath):
+                self.send_error(404, "zip introuvable")
+                return
+            size = os.path.getsize(zpath)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header(
+                "Content-Disposition",
+                f'attachment; filename="{os.path.basename(zpath)}"',
+            )
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            with open(zpath, "rb") as fh:
+                while True:
+                    chunk = fh.read(65536)
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                    except (BrokenPipeError, ConnectionResetError):
+                        break
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        if self.path != "/download":
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            data = json.loads(self.rfile.read(length) or b"{}")
+            urls = data.get("urls", [])
+        except Exception:
+            urls = []
+        # Filtre de sécurité : on ne garde que de vraies URLs
+        urls = [u for u in urls if URL_RE.fullmatch(u.strip())]
+        if not urls:
+            self.send_error(400, "no urls")
+            return
+
+        os.makedirs(DEST, exist_ok=True)
+        # Photo du dossier AVANT, pour détecter les nouveaux fichiers ensuite
+        before = set()
+        for f in os.listdir(DEST):
+            if f.lower().endswith(".mp3"):
+                before.add(os.path.join(DEST, f))
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        produced = set()  # chemins mp3 issus de CETTE session
+        cmd = ["yt-dlp"] + YTDLP_FLAGS + urls
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1
+        )
+        try:
+            for out_line in iter(proc.stdout.readline, ""):
+                out_line = out_line.rstrip("\n")
+                m = DEST_RE.search(out_line) or ALREADY_RE.search(out_line)
+                if m:
+                    produced.add(m.group(1))
+                try:
+                    self.wfile.write((out_line + "\n").encode("utf-8", "replace"))
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    proc.kill()
+                    break
+            proc.wait()
+        finally:
+            if proc.stdout:
+                proc.stdout.close()
+
+        # Fichiers de la session = ceux repérés dans la sortie + nouveaux fichiers du dossier
+        after = set()
+        for f in os.listdir(DEST):
+            if f.lower().endswith(".mp3"):
+                after.add(os.path.join(DEST, f))
+        produced |= (after - before)
+
+        token, _ = make_zip(sorted(produced))
+        try:
+            if token:
+                self.wfile.write(f"##ZIP##{token}\n".encode("utf-8"))
+            else:
+                self.wfile.write(b"##NONE##\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
+class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+
+
+if __name__ == "__main__":
+    os.makedirs(DEST, exist_ok=True)
+    url = f"http://localhost:{PORT}"
+    print(f"\n  🎵 MP3 Downloader lancé sur  {HOST}:{PORT}")
+    print(f"  📁 Destination : {DEST}")
+    print("  (Ctrl-C pour arrêter)\n", flush=True)
+    # Ouvre le navigateur seulement en local sur macOS (pas dans un conteneur)
+    if sys.platform == "darwin" and HOST in ("127.0.0.1", "localhost"):
+        try:
+            threading.Timer(0.7, lambda: subprocess.run(["open", url])).start()
+        except Exception:
+            pass
+    with Server((HOST, PORT), Handler) as httpd:
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\nArrêté.")

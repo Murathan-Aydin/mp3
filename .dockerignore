@@ -1,0 +1,7 @@
+download/
+*.zip
+mp3dl.sh
+Lancer.command
+.git
+__pycache__/
+*.pyc

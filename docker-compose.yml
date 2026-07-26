@@ -1,0 +1,24 @@
+services:
+  mp3downloader:
+    build: .
+    # Coolify gère le domaine + HTTPS via son reverse-proxy.
+    # Le port interne 8756 est exposé au proxy ; adapte le mapping si besoin.
+    ports:
+      - "8756:8756"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8756
+      - DOWNLOAD_DIR=/app/download
+    volumes:
+      # Les MP3 téléchargés persistent hors du conteneur
+      - mp3-downloads:/app/download
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8756/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  mp3-downloads:
