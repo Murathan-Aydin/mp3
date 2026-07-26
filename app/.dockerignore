@@ -1,7 +1,8 @@
 download/
 *.zip
+*.mp3
 mp3dl.sh
-Lancer.command
 .git
 __pycache__/
 *.pyc
+.DS_Store

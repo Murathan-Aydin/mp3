@@ -9,7 +9,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-DEST="./download"
+DEST="../download"   # dossier download à la racine du projet
 URLS=()
 
 # Mode interactif : colle tes liens

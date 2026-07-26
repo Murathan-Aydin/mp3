@@ -4,6 +4,14 @@ Télécharge des musiques YouTube en MP3 (320 kbps, pochette + métadonnées) vi
 petite interface web locale. Colle un ou plusieurs liens (playlist ou musique seule),
 clique sur **Installer**, et récupère un **ZIP** de tes morceaux.
 
+## Contenu du dossier
+
+```
+run.command   ← le seul fichier à lancer (installe tout puis ouvre l'interface)
+download/     ← tes MP3 téléchargés
+app/          ← le code (tu n'as pas besoin d'y toucher)
+```
+
 ---
 
 ## Installation sur Mac (même un Mac tout neuf)
@@ -13,50 +21,48 @@ clique sur **Installer**, et récupère un **ZIP** de tes morceaux.
 ```bash
 git clone https://github.com/Murathan-Aydin/mp3.git
 cd mp3
-./Installer-mac.command
+./run.command
 ```
 
 > La première fois, `git` peut proposer d'installer les « outils de développement »
 > Apple : accepte, c'est normal.
 
-Ensuite, tu peux relancer l'interface d'un simple **double-clic** sur
-`Installer-mac.command` (ou `run.command`, qui lance sans réinstaller).
+`run.command` installe tout seul ce qu'il faut la première fois (**Homebrew, Python,
+yt-dlp, ffmpeg, deno**) puis ouvre l'interface. Les fois suivantes, il lance direct.
 
 ### Méthode ZIP (téléchargement depuis GitHub)
 
 1. Sur GitHub : bouton vert **Code → Download ZIP**, puis décompresse.
-2. Ouvre le **Terminal**, va dans le dossier, et rends les scripts exécutables :
+2. Ouvre le **Terminal**, va dans le dossier, et rends le script exécutable :
    ```bash
    cd ~/Downloads/mp3-main      # adapte le chemin
-   chmod +x *.command
-   ./Installer-mac.command
+   chmod +x run.command
+   ./run.command
    ```
 
 > ⚠️ **Pourquoi le double-clic ne marche pas après un ZIP ?**
-> Le téléchargement ZIP de GitHub perd le « bit exécutable » des fichiers `.command`.
-> La commande `chmod +x *.command` le remet — après ça, le double-clic fonctionne.
+> Le téléchargement ZIP de GitHub perd le « bit exécutable ». La commande
+> `chmod +x run.command` le remet — après ça, le double-clic fonctionne.
 
 > ⚠️ **macOS bloque « développeur non identifié » ?**
-> Clic droit sur le fichier → **Ouvrir** → **Ouvrir**. Une seule fois.
-
-L'installateur met en place **Homebrew, Python, yt-dlp, ffmpeg et deno**, puis ouvre
-l'interface dans ton navigateur. Colle tes liens → **Installer** → le ZIP se télécharge.
+> Clic droit sur `run.command` → **Ouvrir** → **Ouvrir**. Une seule fois.
 
 ---
 
 ## Utilisation
 
-- **Interface web** : `./run.command` (ou `python3 app.py`) → ouvre la page.
-  La première fois seulement, utilise `./Installer-mac.command` pour tout installer.
-- **En ligne de commande** : `./mp3dl.sh` puis colle les liens, Entrée, Ctrl-D.
+- **Interface web** : double-clic sur **`run.command`** → la page s'ouvre dans le
+  navigateur. Colle tes liens → **Installer** → le ZIP se télécharge.
+- **En ligne de commande** (optionnel) : `app/mp3dl.sh`, colle les liens, Entrée, Ctrl-D.
 
-Les MP3 arrivent dans le dossier `download/`.
+Les MP3 arrivent dans le dossier **`download/`**.
 
 ---
 
 ## Déploiement serveur (Docker / Coolify)
 
 ```bash
+cd app
 docker compose up -d --build
 ```
 
