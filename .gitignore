@@ -1,4 +1,5 @@
 download/
+cookies.txt
 *.zip
 *.mp3
 __pycache__/

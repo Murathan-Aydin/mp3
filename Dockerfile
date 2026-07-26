@@ -1,5 +1,8 @@
 FROM python:3.12-slim
 
+# deno = runtime JavaScript utilisé par yt-dlp pour résoudre les défis JS de YouTube
+COPY --from=denoland/deno:bin /deno /usr/local/bin/deno
+
 # ffmpeg = nécessaire pour convertir en MP3 et intégrer la pochette
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
@@ -13,7 +16,8 @@ COPY app.py .
 
 ENV HOST=0.0.0.0 \
     PORT=8756 \
-    DOWNLOAD_DIR=/app/download
+    DOWNLOAD_DIR=/app/download \
+    COOKIES_FILE=/app/cookies.txt
 
 RUN mkdir -p /app/download
 EXPOSE 8756

@@ -274,7 +274,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
         produced = set()  # chemins mp3 issus de CETTE session
-        cmd = ["yt-dlp"] + YTDLP_FLAGS + urls
+        cmd = ["yt-dlp"] + YTDLP_FLAGS
+        # Cookies YouTube (si fournis) : contourne le "Sign in to confirm you're not a bot"
+        cookies = os.environ.get("COOKIES_FILE", "")
+        if cookies and os.path.isfile(cookies):
+            cmd += ["--cookies", cookies]
+        cmd += urls
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1
