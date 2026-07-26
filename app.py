@@ -323,10 +323,25 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
 
 
+def start_server():
+    """Démarre le serveur ; si le port est occupé, en essaie un autre au lieu de planter."""
+    last_err = None
+    for port in range(PORT, PORT + 10):
+        try:
+            httpd = Server((HOST, port), Handler)
+        except OSError as e:
+            last_err = e
+            continue  # port occupé -> on tente le suivant
+        return httpd, port
+    raise SystemExit(f"Impossible d'ouvrir un port libre ({PORT}-{PORT + 9}) : {last_err}")
+
+
 if __name__ == "__main__":
     os.makedirs(DEST, exist_ok=True)
-    url = f"http://localhost:{PORT}"
-    print(f"\n  🎵 MP3 Downloader lancé sur  {HOST}:{PORT}")
+    httpd, port = start_server()
+    url = f"http://localhost:{port}"
+    print(f"\n  🎵 MP3 Downloader lancé sur  {HOST}:{port}")
+    print(f"  🌐 Ouvre dans le navigateur : {url}")
     print(f"  📁 Destination : {DEST}")
     print("  (Ctrl-C pour arrêter)\n", flush=True)
     # Ouvre le navigateur seulement en local sur macOS (pas dans un conteneur)
@@ -335,7 +350,7 @@ if __name__ == "__main__":
             threading.Timer(0.7, lambda: subprocess.run(["open", url])).start()
         except Exception:
             pass
-    with Server((HOST, PORT), Handler) as httpd:
+    with httpd:
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
