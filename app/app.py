@@ -15,6 +15,7 @@ import http.server
 import socketserver
 import os
 import re
+import signal
 import subprocess
 import threading
 import json
@@ -61,6 +62,8 @@ DLDEST_RE = re.compile(r"\[download\] Destination: (.+)$")    # nom du morceau e
 
 # Stocke les zip prêts : token -> chemin du fichier zip
 ZIPS = {}
+# Téléchargements en cours : job -> {"proc": Popen, "stopped": bool} (bouton Stopper)
+JOBS = {}
 
 PAGE = """<!doctype html>
 <html lang="fr">
@@ -94,6 +97,9 @@ PAGE = """<!doctype html>
   button.zip { background: #37d67a; color: #08240f; display: none; }
   button.zip:hover { background: #2cc06b; }
   button.zip.show { display: inline-block; }
+  button.stop { background: #ff6b6b; color: #2a0808; display: none; }
+  button.stop:hover { background: #e85a5a; }
+  button.stop.show { display: inline-block; }
   .count { color: #8b93a1; font-size: 13px; }
   .progress { margin-top: 24px; display: none; }
   .progress.show { display: block; }
@@ -148,6 +154,7 @@ Exemple :
 https://www.youtube.com/watch?v=biYdUZXfz9I ; https://youtu.be/q-3qus2pvJM"></textarea>
     <div class="row">
       <button id="go">Installer</button>
+      <button id="stop" class="stop">⏹ Stopper</button>
       <button id="zip" class="zip">⬇︎ Télécharger le ZIP</button>
       <span class="count" id="count"></span>
     </div>
@@ -178,6 +185,8 @@ https://www.youtube.com/watch?v=biYdUZXfz9I ; https://youtu.be/q-3qus2pvJM"></te
 const ta = document.getElementById('links');
 const btn = document.getElementById('go');
 const zipBtn = document.getElementById('zip');
+const stopBtn = document.getElementById('stop');
+let jobId = null;
 const log = document.getElementById('log');
 const count = document.getElementById('count');
 const prog = document.getElementById('prog');
@@ -212,6 +221,18 @@ function line(txt, cls){
 }
 
 zipBtn.addEventListener('click', () => { if (zipUrl) window.location = zipUrl; });
+
+stopBtn.addEventListener('click', async () => {
+  if (!jobId) return;
+  stopBtn.disabled = true; stopBtn.textContent = 'Arrêt...';
+  try {
+    await fetch('/stop', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({job: jobId})
+    });
+  } catch(e){ line('Erreur : ' + e.message, 'err'); }
+});
 
 // --- Cookies YouTube ---
 const cstatus = document.getElementById('cstatus');
@@ -261,6 +282,8 @@ btn.addEventListener('click', async () => {
   const urls = findUrls(ta.value);
   if (!urls.length){ alert('Aucun lien détecté.'); return; }
   btn.disabled = true; btn.textContent = 'Téléchargement...';
+  jobId = null; stopBtn.disabled = false; stopBtn.textContent = '⏹ Stopper';
+  stopBtn.className = 'stop show';
   zipBtn.className = 'zip'; zipUrl = null;
   log.className = 'log show'; log.innerHTML = '';
   prog.className = 'progress'; pfill.style.width = '0%';
@@ -273,6 +296,7 @@ btn.addEventListener('click', async () => {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({urls})
     });
+    var stopped = false;
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
@@ -300,6 +324,8 @@ btn.addEventListener('click', async () => {
                          parseInt(parts2[2])||0, parts2[3]||'');
           continue;
         }
+        if (p.startsWith('##JOB##')){ jobId = p.slice(7).trim(); continue; }
+        if (p.startsWith('##STOPPED##')){ stopped = true; line('⏹ Arrêté. Les morceaux terminés sont dans le ZIP.', 'info'); continue; }
         if (p.startsWith('##NONE##')){ line('Aucun nouveau fichier à zipper.', 'info'); continue; }
         let cls = '';
         if (p.startsWith('[ExtractAudio]') || p.includes('has already been downloaded')) cls = 'done';
@@ -308,11 +334,12 @@ btn.addEventListener('click', async () => {
       }
     }
     if (prog.classList.contains('show')){ pfill.style.width = '100%'; pcur.textContent = ''; }
-    line('✅ Terminé. Fichiers dans le dossier download.', 'done');
+    if (!stopped) line('✅ Terminé. Fichiers dans le dossier download.', 'done');
   } catch(e){
     line('Erreur : ' + e.message, 'err');
   }
   btn.disabled = false; btn.textContent = 'Installer';
+  stopBtn.className = 'stop'; jobId = null;
 });
 </script>
 </body>
@@ -505,9 +532,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
         print("  🍪 Cookies mis à jour depuis la page", flush=True)
         self.send_text(200, "✅ Cookies enregistrés")
 
+    def stop_job(self):
+        """Bouton Stopper : tue yt-dlp (et ffmpeg) du téléchargement donné."""
+        data = self.read_body(4096) or b"{}"
+        try:
+            job = json.loads(data).get("job", "")
+        except (ValueError, AttributeError):
+            job = ""
+        entry = JOBS.get(job)
+        if not entry:
+            self.send_text(404, "Aucun téléchargement en cours")
+            return
+        entry["stopped"] = True
+        try:
+            os.killpg(entry["proc"].pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        self.send_text(200, "Arrêt demandé")
+
     def do_POST(self):
         if self.path == "/cookies":
             self.upload_cookies()
+            return
+        if self.path == "/stop":
+            self.stop_job()
             return
         if self.path != "/download":
             self.send_error(404)
@@ -547,8 +595,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         cmd += urls
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1
+            text=True, bufsize=1,
+            start_new_session=True,  # groupe de processus : Stopper tue aussi ffmpeg
         )
+        job = uuid.uuid4().hex
+        JOBS[job] = {"proc": proc, "stopped": False}
 
         # État de progression
         total = len(urls)   # au minimum le nombre de liens ; ajusté si playlist
@@ -567,6 +618,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             send(f"##PROG##{done}|{total}|{int(cur_pct)}|{name}\n")
 
         try:
+            send(f"##JOB##{job}\n")
             send(cookies_msg)
             for out_line in iter(proc.stdout.readline, ""):
                 out_line = out_line.rstrip("\n")
@@ -615,6 +667,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         finally:
             if proc.stdout:
                 proc.stdout.close()
+            stopped = JOBS.pop(job, {}).get("stopped")
+        if stopped:
+            try:
+                send("##STOPPED##\n")
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
         # Fichiers de la session = ceux repérés dans la sortie + nouveaux fichiers du dossier
         after = set()

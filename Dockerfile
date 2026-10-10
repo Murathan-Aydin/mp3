@@ -8,8 +8,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# yt-dlp installé via pip (facile à mettre à jour en rebuild)
-RUN pip install --no-cache-dir --upgrade yt-dlp
+# yt-dlp installé via pip (facile à mettre à jour en rebuild).
+# L'extra [default] inclut yt-dlp-ejs : les scripts que deno exécute pour résoudre
+# les défis JS de YouTube (sans eux : « Signature solving failed »).
+RUN pip install --no-cache-dir --upgrade "yt-dlp[default]"
 
 WORKDIR /app
 COPY app/app.py .
