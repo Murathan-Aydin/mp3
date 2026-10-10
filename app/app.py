@@ -334,6 +334,57 @@ def make_zip(files):
     return token, zpath
 
 
+def to_netscape(text):
+    """Normalise un export de cookies au format Netscape attendu par yt-dlp.
+
+    Accepte le format Netscape (tabulations, ou espaces si copié-collé) et le JSON
+    des extensions navigateur. Renvoie (texte, None) ou (None, message d'erreur).
+    """
+    stripped = text.strip()
+    if stripped.startswith(("[", "{")):
+        try:
+            items = json.loads(stripped)
+        except ValueError:
+            return None, "JSON illisible : exporte plutôt au format Netscape (cookies.txt)"
+        if isinstance(items, dict):
+            items = items.get("cookies", [])
+        lines = []
+        for c in items if isinstance(items, list) else []:
+            if not isinstance(c, dict) or not c.get("name") or not c.get("domain"):
+                continue
+            domain = c["domain"]
+            host_only = c.get("hostOnly", not domain.startswith("."))
+            lines.append("\t".join([
+                ("#HttpOnly_" if c.get("httpOnly") else "") + domain,
+                "FALSE" if host_only else "TRUE",
+                c.get("path") or "/",
+                "TRUE" if c.get("secure") else "FALSE",
+                str(int(c.get("expirationDate") or 0)),
+                c["name"],
+                str(c.get("value", "")),
+            ]))
+        text = "\n".join(lines)
+
+    rows = []
+    for l in text.splitlines():
+        l = l.strip("\r")
+        if not l or (l.startswith("#") and not l.startswith("#HttpOnly_")):
+            continue  # commentaires / en-tête
+        fields = l.split("\t")
+        if len(fields) != 7 and len(l.split()) == 7:
+            fields = l.split()  # tabulations transformées en espaces par un éditeur
+        if len(fields) == 7:
+            rows.append(fields)
+    if not rows:
+        return None, "Format non reconnu : il faut un cookies.txt (Netscape) ou un export JSON"
+    yt = [r for r in rows if "youtube.com" in r[0]]
+    if not yt:
+        return None, (f"Aucun cookie youtube.com dans le fichier ({len(rows)} cookie(s) "
+                      "d'autres sites) : exporte depuis un onglet youtube.com")
+    body = "\n".join("\t".join(r) for r in rows)
+    return "# Netscape HTTP Cookie File\n" + body + "\n", None
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # silence les logs par requête
@@ -402,30 +453,49 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def read_body(self, limit):
+        """Lit le corps de la requête (Content-Length ou chunked via proxy). None si > limit."""
+        if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
+            data = b""
+            while True:
+                size = int(self.rfile.readline().split(b";")[0].strip() or b"0", 16)
+                if size == 0:
+                    while self.rfile.readline() not in (b"\r\n", b"\n", b""):
+                        pass  # trailers éventuels
+                    return data
+                data += self.rfile.read(size)
+                self.rfile.readline()  # CRLF de fin de chunk
+                if len(data) > limit:
+                    return None
+        length = int(self.headers.get("Content-Length", 0))
+        if length > limit:
+            return None
+        return self.rfile.read(length) if length > 0 else b""
+
     def upload_cookies(self):
-        """Reçoit un cookies.txt (format Netscape) depuis la page et le remplace sur le disque."""
+        """Reçoit un cookies.txt (Netscape ou JSON) depuis la page et le remplace sur le disque."""
         if COOKIES_PASSWORD:
             given = self.headers.get("X-Cookies-Password", "")
             if not hmac.compare_digest(given.encode("utf-8"), COOKIES_PASSWORD.encode("utf-8")):
                 self.send_text(403, "Mot de passe incorrect")
                 return
-        length = int(self.headers.get("Content-Length", 0))
-        if length <= 0 or length > COOKIES_MAX_SIZE:
-            self.send_text(400, "Fichier vide ou trop gros")
+        data = self.read_body(COOKIES_MAX_SIZE)
+        if data is None:
+            self.send_text(400, "Fichier trop gros (max 1 Mo) : exporte seulement les cookies de youtube.com")
             return
-        data = self.rfile.read(length)
+        if not data:
+            self.send_text(400, "Fichier vide")
+            return
         try:
-            text = data.decode("utf-8")
+            text = data.decode("utf-8-sig")
         except UnicodeDecodeError:
             self.send_text(400, "Ce n'est pas un fichier texte")
             return
-        # Format Netscape : 7 champs séparés par des tabulations, au moins un cookie YouTube
-        rows = [l.split("\t") for l in text.splitlines() if l and not l.startswith("# ")]
-        if not any(len(r) == 7 and "youtube.com" in r[0] for r in rows):
-            self.send_text(400, "Format invalide : exporte un cookies.txt (Netscape) depuis youtube.com")
+        text, err = to_netscape(text)
+        if err:
+            print(f"  ⚠️  Cookies refusés : {err}", flush=True)
+            self.send_text(400, err)
             return
-        if not text.startswith("# Netscape HTTP Cookie File") and not text.startswith("# HTTP Cookie File"):
-            text = "# Netscape HTTP Cookie File\n" + text  # en-tête exigé par yt-dlp
         os.makedirs(os.path.dirname(COOKIES_FILE) or ".", exist_ok=True)
         tmp = COOKIES_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
