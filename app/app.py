@@ -34,7 +34,7 @@ DEST = os.environ.get("DOWNLOAD_DIR", os.path.join(HERE, "download"))
 COOKIES_FILE = os.environ.get("COOKIES_FILE") or os.path.join(HERE, "cookies.txt")
 # Mot de passe optionnel pour envoyer des cookies depuis la page (conseillé si l'URL est publique)
 COOKIES_PASSWORD = os.environ.get("COOKIES_PASSWORD", "")
-COOKIES_MAX_SIZE = 1024 * 1024
+COOKIES_MAX_SIZE = 3 * 1024 * 1024
 
 YTDLP_FLAGS = [
     "--extract-audio",
@@ -481,7 +481,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
         data = self.read_body(COOKIES_MAX_SIZE)
         if data is None:
-            self.send_text(400, "Fichier trop gros (max 1 Mo) : exporte seulement les cookies de youtube.com")
+            self.send_text(400, "Fichier trop gros (max 3 Mo) : exporte seulement les cookies de youtube.com")
             return
         if not data:
             self.send_text(400, "Fichier vide")
