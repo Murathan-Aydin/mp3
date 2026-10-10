@@ -17,9 +17,14 @@ services:
       - YT_COOKIES_B64=${YT_COOKIES_B64:-}
       # Mot de passe demandé pour envoyer des cookies depuis la page (conseillé)
       - COOKIES_PASSWORD=${COOKIES_PASSWORD:-}
+      # Propriétaire des MP3 sur l'hôte (ubuntu = 1000:1000) : sinon ils seraient à root
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
     volumes:
-      # Les MP3 téléchargés persistent hors du conteneur
-      - mp3-downloads:/app/download
+      # MP3 déposés directement dans la bibliothèque Navidrome (sous-dossier YouTube),
+      # donc visibles dans Navidrome / Amperfy. Hors serveur, remplace par
+      # un chemin local, ex. ./download:/app/download
+      - /srv/media/music/YouTube:/app/download
       # Cookies YouTube (persistent entre les redéploiements)
       - mp3-config:/app/config
     restart: unless-stopped
@@ -31,5 +36,4 @@ services:
       start_period: 10s
 
 volumes:
-  mp3-downloads:
   mp3-config:

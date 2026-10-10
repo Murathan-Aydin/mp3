@@ -18,6 +18,7 @@ import re
 import signal
 import subprocess
 import threading
+import time
 import json
 import zipfile
 import tempfile
@@ -36,6 +37,10 @@ COOKIES_FILE = os.environ.get("COOKIES_FILE") or os.path.join(HERE, "cookies.txt
 # Mot de passe optionnel pour envoyer des cookies depuis la page (conseillé si l'URL est publique)
 COOKIES_PASSWORD = os.environ.get("COOKIES_PASSWORD", "")
 COOKIES_MAX_SIZE = 3 * 1024 * 1024
+# Propriétaire des MP3 (ex. bibliothèque Navidrome sur l'hôte) : sinon ils restent à root
+PUID = os.environ.get("PUID", "")
+PGID = os.environ.get("PGID", "")
+ZIP_TTL = 3600  # les ZIP sont supprimés au bout d'1 h (économise le disque)
 
 YTDLP_FLAGS = [
     "--extract-audio",
@@ -346,8 +351,34 @@ btn.addEventListener('click', async () => {
 </html>"""
 
 
+def give_to_owner(paths):
+    """Attribue les fichiers à PUID:PGID (si définis) pour que l'hôte puisse les gérer."""
+    if not PUID.isdigit():
+        return
+    uid = int(PUID)
+    gid = int(PGID) if PGID.isdigit() else uid
+    for path in paths:
+        try:
+            os.chown(path, uid, gid)
+        except OSError:
+            pass
+
+
+def purge_old_zips():
+    """Supprime les ZIP de plus de ZIP_TTL secondes."""
+    now = time.time()
+    for token, zpath in list(ZIPS.items()):
+        try:
+            if now - os.path.getmtime(zpath) > ZIP_TTL:
+                os.remove(zpath)
+                del ZIPS[token]
+        except OSError:
+            ZIPS.pop(token, None)
+
+
 def make_zip(files):
     """Crée un zip des fichiers donnés, renvoie (token, chemin) ou (None, None)."""
+    purge_old_zips()
     files = [f for f in files if f and os.path.isfile(f)]
     if not files:
         return None, None
@@ -680,6 +711,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if f.lower().endswith(".mp3"):
                 after.add(os.path.join(DEST, f))
         produced |= (after - before)
+        give_to_owner(produced)
 
         token, _ = make_zip(sorted(produced))
         try:
@@ -728,6 +760,7 @@ def start_server():
 
 if __name__ == "__main__":
     os.makedirs(DEST, exist_ok=True)
+    give_to_owner([DEST])
     install_cookies_from_env()
     httpd, port = start_server()
     url = f"http://localhost:{port}"

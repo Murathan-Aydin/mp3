@@ -82,13 +82,18 @@ Les MP3 arrivent dans le dossier **`download/`**.
      `base64 -i ~/Downloads/cookies.txt | tr -d '\n' | pbcopy`. Elle est réécrite à
      chaque démarrage et écrase donc les cookies envoyés depuis la page : laisse-la
      vide si tu utilises le panneau.
-5. **Deploy**. Les MP3 sont conservés dans le volume `mp3-downloads`.
+5. **Deploy**. Les MP3 sont déposés dans **`/srv/media/music/YouTube`** sur le serveur,
+   c'est-à-dire dans la bibliothèque **Navidrome** (montée en `/music`) : ils
+   apparaissent dans Navidrome et Amperfy après le scan. Ils appartiennent à
+   `PUID:PGID` (1000:1000 = `ubuntu` par défaut). Pour un autre dossier, modifie le
+   volume `/srv/media/music/YouTube:/app/download` dans `docker-compose.yml`.
 
 > ⚠️ L'interface n'a pas d'authentification : protège-la (Basic Auth Traefik dans
 > Coolify par exemple) si l'URL est publique.
 
-En Docker local (hors Coolify), remplace `expose` par `ports: ["8756:8756"]` dans
-`docker-compose.yml`, puis à la racine du dossier :
+En Docker local (hors Coolify), remplace `expose` par `ports: ["8756:8756"]` et
+`/srv/media/music/YouTube` par `./download` dans `docker-compose.yml`, puis à la racine
+du dossier :
 
 ```bash
 docker compose up -d --build
