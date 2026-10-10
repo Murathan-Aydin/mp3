@@ -1,8 +1,0 @@
-download/
-*.zip
-*.mp3
-mp3dl.sh
-.git
-__pycache__/
-*.pyc
-.DS_Store

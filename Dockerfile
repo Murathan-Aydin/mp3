@@ -12,7 +12,7 @@ RUN apt-get update \
 RUN pip install --no-cache-dir --upgrade yt-dlp
 
 WORKDIR /app
-COPY app.py .
+COPY app/app.py .
 
 ENV HOST=0.0.0.0 \
     PORT=8756 \

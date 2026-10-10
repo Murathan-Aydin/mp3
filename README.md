@@ -7,9 +7,11 @@ clique sur **Installer**, et récupère un **ZIP** de tes morceaux.
 ## Contenu du dossier
 
 ```
-run.command   ← le seul fichier à lancer (installe tout puis ouvre l'interface)
-download/     ← tes MP3 téléchargés
-app/          ← le code (tu n'as pas besoin d'y toucher)
+run.command         ← le seul fichier à lancer (installe tout puis ouvre l'interface)
+download/           ← tes MP3 téléchargés
+app/                ← le code (tu n'as pas besoin d'y toucher)
+Dockerfile          ← déploiement serveur (Docker / Coolify)
+docker-compose.yml
 ```
 
 ---
@@ -63,8 +65,8 @@ Les MP3 arrivent dans le dossier **`download/`**.
 
 1. **New Resource → Repository GitHub** `Murathan-Aydin/mp3`, branche `main`.
 2. **Build Pack : Docker Compose**
-   - Base Directory : `/app`
-   - Docker Compose Location : `/docker-compose.yml`
+   - Base Directory : `/` (valeur par défaut)
+   - Docker Compose Location : `/docker-compose.yml` (valeur par défaut)
 3. **Domaine** du service `mp3downloader` : `https://mp3.ton-domaine.fr:8756`
    (le `:8756` indique au proxy le port interne ; il n'apparaît pas dans l'URL publique).
 4. **Cookies YouTube** : sur un serveur, YouTube demande souvent une authentification
@@ -77,10 +79,9 @@ Les MP3 arrivent dans le dossier **`download/`**.
 > Coolify par exemple) si l'URL est publique.
 
 En Docker local (hors Coolify), remplace `expose` par `ports: ["8756:8756"]` dans
-`app/docker-compose.yml`, puis :
+`docker-compose.yml`, puis à la racine du dossier :
 
 ```bash
-cd app
 docker compose up -d --build
 ```
 

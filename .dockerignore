@@ -1,0 +1,11 @@
+.git
+download/
+cookies.txt
+*.zip
+*.mp3
+run.command
+app/mp3dl.sh
+README.md
+__pycache__/
+*.pyc
+.DS_Store
