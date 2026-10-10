@@ -57,12 +57,19 @@ SIGNIN_URL = (
     "%26app%3Ddesktop%26hl%3Dfr%26next%3Dhttps%253A%252F%252Fwww.youtube.com%252F"
 )
 # Boutons « plus tard » des pages intermédiaires (options de récupération, passkeys…)
-SKIP_RE = re.compile(r"^(not now|plus tard|pas maintenant|skip|ignorer|later|remind me later)$", re.I)
+SKIP_RE = re.compile(r"^(not now|plus tard|pas maintenant|skip|ignorer|later|remind me later|"
+                     r"me demander dans une semaine|ask me in a week)$", re.I)
 # Champ identifiant : #identifierId (type text depuis 2025), type=email sur les anciennes pages
 EMAIL_SEL = "#identifierId, input[name=identifier], input[type=email]"
 EMAIL_BAD = "#identifierId[aria-invalid=true], input[name=identifier][aria-invalid=true], input[type=email][aria-invalid=true]"
 PASSWORD_SEL = "input[type=password][name=Passwd]"
 CONSENT_RE = re.compile(r"(tout refuser|reject all|tout accepter|accept all)", re.I)
+# Fenêtres YouTube après connexion (« Associer vos services Google ? », nouveautés…)
+YT_DIALOG_RE = re.compile(r"(me demander dans une semaine|ask me in a week|remind me in a week|"
+                          r"me le rappeler plus tard|remind me later|pas maintenant|not now|"
+                          r"non merci|no thanks)", re.I)
+# Cookies présents seulement quand le compte est connecté sur youtube.com
+YT_SESSION_COOKIES = {"LOGIN_INFO", "SID", "__Secure-3PSID"}
 
 
 class LoginError(Exception):
@@ -109,12 +116,34 @@ def dismiss_consent(page):
             page.wait_for_load_state("domcontentloaded")
 
 
-def youtube_logged_in(page):
+def dismiss_youtube_dialogs(page):
+    """Ferme les fenêtres YouTube qui s'affichent par-dessus la page après connexion,
+    par ex. « Associer vos services Google ? » -> « Me demander dans une semaine »."""
+    for _ in range(3):
+        if not click_button(page, YT_DIALOG_RE):
+            return
+        step("Fenêtre YouTube fermée (« plus tard »)")
+        time.sleep(2)
+
+
+def youtube_logged_in(page, just_signed_in=False):
     try:
         page.wait_for_load_state("domcontentloaded")
         dismiss_consent(page)
+        time.sleep(2)  # laisse les fenêtres YouTube apparaître
+        dismiss_youtube_dialogs(page)
         page.wait_for_function("() => window.ytcfg && ytcfg.get", timeout=15000)
-        return bool(page.evaluate("() => ytcfg.get('LOGGED_IN')"))
+        if page.evaluate("() => ytcfg.get('LOGGED_IN')"):
+            return True
+    except Exception:
+        pass
+    # Repli juste après une connexion : une fenêtre ou un chargement partiel peut fausser
+    # ytcfg. (Pas avant : un vieux LOGIN_INFO survit parfois à une session expirée.)
+    if not just_signed_in:
+        return False
+    try:
+        names = {c["name"] for c in page.context.cookies("https://www.youtube.com")}
+        return bool(names & YT_SESSION_COOKIES)
     except Exception:
         return False
 
@@ -340,7 +369,7 @@ def main():
             if not youtube_logged_in(page):
                 step("Session expirée : connexion au compte Google")
                 sign_in(page)
-                if not youtube_logged_in(page):
+                if not youtube_logged_in(page, just_signed_in=True):
                     raise LoginError("Connecté à Google mais YouTube ne reconnaît pas la session")
             # Page neutre avant export (conseil yt-dlp : évite une rotation immédiate des cookies)
             page.goto("https://www.youtube.com/robots.txt", wait_until="domcontentloaded")
