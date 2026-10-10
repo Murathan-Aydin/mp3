@@ -15,6 +15,8 @@ services:
       # Cookies YouTube encodés en base64 (voir README) : à renseigner dans
       # Coolify > Environment Variables. Écrits dans COOKIES_FILE au démarrage.
       - YT_COOKIES_B64=${YT_COOKIES_B64:-}
+      # Mot de passe demandé pour envoyer des cookies depuis la page (conseillé)
+      - COOKIES_PASSWORD=${COOKIES_PASSWORD:-}
     volumes:
       # Les MP3 téléchargés persistent hors du conteneur
       - mp3-downloads:/app/download

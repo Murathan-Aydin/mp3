@@ -10,6 +10,7 @@ clique sur « Installer ». Playlist -> tout est téléchargé ; musique seule -
 Les MP3 arrivent dans ./download, et un ZIP de la session est proposé au téléchargement.
 """
 import base64
+import hmac
 import http.server
 import socketserver
 import os
@@ -29,6 +30,11 @@ HOST = os.environ.get("HOST", "127.0.0.1")   # 0.0.0.0 en conteneur (voir docker
 PORT = int(os.environ.get("PORT", "8756"))
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEST = os.environ.get("DOWNLOAD_DIR", os.path.join(HERE, "download"))
+# Cookies YouTube (contourne le "Sign in to confirm you're not a bot" sur un serveur)
+COOKIES_FILE = os.environ.get("COOKIES_FILE") or os.path.join(HERE, "cookies.txt")
+# Mot de passe optionnel pour envoyer des cookies depuis la page (conseillé si l'URL est publique)
+COOKIES_PASSWORD = os.environ.get("COOKIES_PASSWORD", "")
+COOKIES_MAX_SIZE = 1024 * 1024
 
 YTDLP_FLAGS = [
     "--extract-audio",
@@ -116,6 +122,21 @@ PAGE = """<!doctype html>
   .done { color: #37d67a; } .err { color: #ff6b6b; } .info { color: #8b93a1; }
   .hint { margin-top: 14px; font-size: 12.5px; color: #6b7280; }
   code { background: #171a21; padding: 2px 6px; border-radius: 5px; }
+  .cookies {
+    margin-top: 28px; border: 1px solid #2a2f3a; border-radius: 12px;
+    background: #171a21; padding: 14px 16px;
+  }
+  .cookies summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+  .cstatus { font-size: 13px; margin: 10px 0 0; }
+  .cstatus.ok { color: #37d67a; } .cstatus.ko { color: #ffb84d; }
+  .cookies .row { margin-top: 12px; }
+  .cookies input[type=file] { color: #8b93a1; font-size: 13px; max-width: 100%; }
+  .cookies input[type=password] {
+    padding: 10px 12px; border-radius: 10px; border: 1px solid #2a2f3a;
+    background: #0f1115; color: #e6e8eb; font-size: 14px;
+  }
+  .cookies button { padding: 10px 18px; font-size: 14px; }
+  .cmsg { font-size: 13px; }
 </style>
 </head>
 <body>
@@ -139,6 +160,19 @@ https://www.youtube.com/watch?v=biYdUZXfz9I ; https://youtu.be/q-3qus2pvJM"></te
       </div>
     </div>
     <div class="log" id="log"></div>
+    <details class="cookies" id="cookies">
+      <summary>🍪 Cookies YouTube</summary>
+      <p class="cstatus" id="cstatus">Vérification...</p>
+      <div class="row">
+        <input type="file" id="cfile" accept=".txt,text/plain">
+        <input type="password" id="cpass" placeholder="Mot de passe" style="display:none">
+        <button id="csend">Envoyer</button>
+        <span class="cmsg" id="cmsg"></span>
+      </div>
+      <p class="hint">Si YouTube répond « Sign in to confirm you're not a bot » : exporte un
+      <code>cookies.txt</code> (navigation privée, connecté à YouTube, extension
+      « Get cookies.txt LOCALLY ») et envoie-le ici. Il est conservé sur le serveur.</p>
+    </details>
   </div>
 <script>
 const ta = document.getElementById('links');
@@ -178,6 +212,50 @@ function line(txt, cls){
 }
 
 zipBtn.addEventListener('click', () => { if (zipUrl) window.location = zipUrl; });
+
+// --- Cookies YouTube ---
+const cstatus = document.getElementById('cstatus');
+const cfile = document.getElementById('cfile');
+const cpass = document.getElementById('cpass');
+const csend = document.getElementById('csend');
+const cmsg = document.getElementById('cmsg');
+
+async function refreshCookies(){
+  try {
+    const st = await (await fetch('/cookies-status')).json();
+    cpass.style.display = st.password_required ? '' : 'none';
+    if (st.present){
+      cstatus.className = 'cstatus ok';
+      cstatus.textContent = '✅ Cookies présents (mis à jour le ' + st.updated + ')';
+    } else {
+      cstatus.className = 'cstatus ko';
+      cstatus.textContent = '⚠️ Aucun cookies : YouTube risque de bloquer les téléchargements';
+      document.getElementById('cookies').open = true;
+    }
+  } catch(e){ cstatus.textContent = 'Statut indisponible'; }
+}
+
+csend.addEventListener('click', async () => {
+  const f = cfile.files[0];
+  if (!f){ cmsg.className = 'cmsg err'; cmsg.textContent = 'Choisis un fichier cookies.txt'; return; }
+  csend.disabled = true; cmsg.className = 'cmsg info'; cmsg.textContent = 'Envoi...';
+  try {
+    const res = await fetch('/cookies', {
+      method: 'POST',
+      headers: {'Content-Type': 'text/plain', 'X-Cookies-Password': cpass.value},
+      body: f
+    });
+    const txt = await res.text();
+    cmsg.className = res.ok ? 'cmsg done' : 'cmsg err';
+    cmsg.textContent = txt;
+    if (res.ok){ cfile.value = ''; refreshCookies(); }
+  } catch(e){
+    cmsg.className = 'cmsg err'; cmsg.textContent = 'Erreur : ' + e.message;
+  }
+  csend.disabled = false;
+});
+
+refreshCookies();
 
 btn.addEventListener('click', async () => {
   const urls = findUrls(ta.value);
@@ -269,6 +347,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif parsed.path == "/cookies-status":
+            present = os.path.isfile(COOKIES_FILE)
+            updated = ""
+            if present:
+                mtime = os.path.getmtime(COOKIES_FILE)
+                updated = datetime.datetime.fromtimestamp(mtime).strftime("%d/%m/%Y %H:%M")
+            self.send_json({
+                "present": present,
+                "updated": updated,
+                "password_required": bool(COOKIES_PASSWORD),
+            })
         elif parsed.path == "/get-zip":
             qs = parse_qs(parsed.query)
             token = (qs.get("token") or [""])[0]
@@ -297,7 +386,59 @@ class Handler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    def send_json(self, obj):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_text(self, code, text):
+        body = text.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def upload_cookies(self):
+        """Reçoit un cookies.txt (format Netscape) depuis la page et le remplace sur le disque."""
+        if COOKIES_PASSWORD:
+            given = self.headers.get("X-Cookies-Password", "")
+            if not hmac.compare_digest(given.encode("utf-8"), COOKIES_PASSWORD.encode("utf-8")):
+                self.send_text(403, "Mot de passe incorrect")
+                return
+        length = int(self.headers.get("Content-Length", 0))
+        if length <= 0 or length > COOKIES_MAX_SIZE:
+            self.send_text(400, "Fichier vide ou trop gros")
+            return
+        data = self.rfile.read(length)
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            self.send_text(400, "Ce n'est pas un fichier texte")
+            return
+        # Format Netscape : 7 champs séparés par des tabulations, au moins un cookie YouTube
+        rows = [l.split("\t") for l in text.splitlines() if l and not l.startswith("# ")]
+        if not any(len(r) == 7 and "youtube.com" in r[0] for r in rows):
+            self.send_text(400, "Format invalide : exporte un cookies.txt (Netscape) depuis youtube.com")
+            return
+        if not text.startswith("# Netscape HTTP Cookie File") and not text.startswith("# HTTP Cookie File"):
+            text = "# Netscape HTTP Cookie File\n" + text  # en-tête exigé par yt-dlp
+        os.makedirs(os.path.dirname(COOKIES_FILE) or ".", exist_ok=True)
+        tmp = COOKIES_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, COOKIES_FILE)
+        print("  🍪 Cookies mis à jour depuis la page", flush=True)
+        self.send_text(200, "✅ Cookies enregistrés")
+
     def do_POST(self):
+        if self.path == "/cookies":
+            self.upload_cookies()
+            return
         if self.path != "/download":
             self.send_error(404)
             return
@@ -328,12 +469,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         produced = set()  # chemins mp3 issus de CETTE session
         cmd = ["yt-dlp"] + YTDLP_FLAGS
         # Cookies YouTube (si fournis) : contourne le "Sign in to confirm you're not a bot"
-        cookies = os.environ.get("COOKIES_FILE", "")
-        if cookies and os.path.isfile(cookies):
-            cmd += ["--cookies", cookies]
-            cookies_msg = f"🍪 Cookies utilisés : {cookies}\n"
+        if os.path.isfile(COOKIES_FILE):
+            cmd += ["--cookies", COOKIES_FILE]
+            cookies_msg = "🍪 Cookies utilisés\n"
         else:
-            cookies_msg = "⚠️ Aucun cookies.txt trouvé : YouTube risque de bloquer (voir README)\n"
+            cookies_msg = "⚠️ Aucun cookies : YouTube risque de bloquer (envoie un cookies.txt en bas de la page)\n"
         cmd += urls
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -431,8 +571,8 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 def install_cookies_from_env():
     """Coolify : YT_COOKIES_B64 (cookies.txt encodé en base64) -> écrit dans COOKIES_FILE."""
     b64 = os.environ.get("YT_COOKIES_B64", "").strip()
-    path = os.environ.get("COOKIES_FILE", "")
-    if not b64 or not path:
+    path = COOKIES_FILE
+    if not b64:
         return
     try:
         data = base64.b64decode(b64, validate=True)

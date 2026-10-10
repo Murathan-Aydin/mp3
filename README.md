@@ -71,19 +71,18 @@ Les MP3 arrivent dans le dossier **`download/`**.
    (le `:8756` indique au proxy le port interne ; il n'apparaît pas dans l'URL publique).
 4. **Cookies YouTube** : sur un serveur, YouTube demande souvent une authentification
    (« confirm you're not a bot »).
-   - Ouvre une **fenêtre de navigation privée**, connecte-toi à YouTube, va sur
-     `https://www.youtube.com/robots.txt`, exporte les cookies avec l'extension
+   - Exporte un `cookies.txt` : **fenêtre de navigation privée**, connecte-toi à
+     YouTube, va sur `https://www.youtube.com/robots.txt`, exporte avec l'extension
      « Get cookies.txt LOCALLY », puis **ferme la fenêtre privée**.
-   - Sur ton Mac, encode le fichier en base64 (copié dans le presse-papier) :
-     ```bash
-     base64 -i ~/Downloads/cookies.txt | tr -d '\n' | pbcopy
-     ```
-   - Dans Coolify : **Environment Variables** → `YT_COOKIES_B64` = colle la valeur.
-   - Au démarrage, l'app écrit les cookies dans le volume `mp3-config`
-     (`/app/config/cookies.txt`). Le log de chaque téléchargement indique
-     « 🍪 Cookies utilisés » ou « ⚠️ Aucun cookies.txt trouvé ».
+   - Envoie-le depuis la page : panneau **🍪 Cookies YouTube** en bas → choisis le
+     fichier → **Envoyer**. Il est conservé dans le volume `mp3-config`.
+   - Conseillé : définis `COOKIES_PASSWORD` dans Coolify → **Environment Variables**
+     pour que personne d'autre ne puisse remplacer tes cookies.
+   - Alternative : `YT_COOKIES_B64` = sortie de
+     `base64 -i ~/Downloads/cookies.txt | tr -d '\n' | pbcopy`. Elle est réécrite à
+     chaque démarrage et écrase donc les cookies envoyés depuis la page : laisse-la
+     vide si tu utilises le panneau.
 5. **Deploy**. Les MP3 sont conservés dans le volume `mp3-downloads`.
-   Pour changer de cookies : modifie `YT_COOKIES_B64` puis **Redeploy**.
 
 > ⚠️ L'interface n'a pas d'authentification : protège-la (Basic Auth Traefik dans
 > Coolify par exemple) si l'URL est publique.
