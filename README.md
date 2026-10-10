@@ -82,11 +82,50 @@ Les MP3 arrivent dans le dossier **`download/`**.
      `base64 -i ~/Downloads/cookies.txt | tr -d '\n' | pbcopy`. Elle est réécrite à
      chaque démarrage et écrase donc les cookies envoyés depuis la page : laisse-la
      vide si tu utilises le panneau.
+   - **Ou, plus simple : connexion automatique** (voir ci-dessous) — plus besoin
+     d'exporter des cookies à la main.
 5. **Deploy**. Les MP3 sont déposés dans **`/srv/media/music/YouTube`** sur le serveur,
    c'est-à-dire dans la bibliothèque **Navidrome** (montée en `/music`) : ils
    apparaissent dans Navidrome et Amperfy après le scan. Ils appartiennent à
    `PUID:PGID` (1000:1000 = `ubuntu` par défaut). Pour un autre dossier, modifie le
    volume `/srv/media/music/YouTube:/app/download` dans `docker-compose.yml`.
+
+### Installations en arrière-plan
+
+Chaque clic sur **Installer** crée une installation côté serveur : on peut rafraîchir
+ou fermer la page, elle continue. La section **Installations** liste celles en attente,
+en cours et terminées (progression, journal, bouton Stopper, ZIP), pendant 24 h.
+`MAX_PARALLEL` (2 par défaut) fixe le nombre d'installations simultanées ; les
+suivantes attendent leur tour.
+
+### Connexion automatique au compte YouTube
+
+Renseigne dans Coolify → **Environment Variables** :
+
+| Variable | Rôle |
+|---|---|
+| `GOOGLE_EMAIL` | adresse Gmail du compte |
+| `GOOGLE_PASSWORD` | mot de passe |
+| `GOOGLE_TOTP_SECRET` | *(optionnel)* secret de l'appli d'authentification si la validation en 2 étapes est active (la clé affichée sous le QR code, « Impossible de scanner ? ») |
+| `COOKIES_REFRESH_HOURS` | *(optionnel)* fréquence de rafraîchissement, 12 h par défaut |
+
+Le serveur se connecte avec un navigateur headless (**Camoufox**, un Firefox que Google
+accepte, contrairement au navigateur standard de Playwright), récupère les cookies et
+les rafraîchit tout seul : au démarrage, toutes les `COOKIES_REFRESH_HOURS`, et dès que
+YouTube répond « Sign in to confirm you're not a bot » (l'installation est alors
+relancée automatiquement). Le profil du navigateur est gardé dans le volume
+`mp3-config`, donc le mot de passe n'est retapé que si la session expire.
+
+**Première connexion** : depuis un serveur inconnu, Google demande souvent une
+vérification (numéro de téléphone, code SMS, captcha). Le panneau **🍪 Cookies YouTube**
+affiche alors l'écran du navigateur en direct : clique dedans, tape le code demandé,
+Entrée. C'est à faire une fois ; la session est ensuite conservée. En cas d'échec, une
+capture d'écran est disponible dans le panneau et un nouvel essai automatique n'a lieu
+qu'après 30 min (bouton **Reconnecter maintenant** pour forcer).
+
+> ⚠️ Utilise un **compte secondaire** dédié : YouTube peut restreindre un compte
+> utilisé avec yt-dlp. Définis `COOKIES_PASSWORD` : il protège aussi le bouton
+> Reconnecter et le pilotage du navigateur de connexion.
 
 > ⚠️ L'interface n'a pas d'authentification : protège-la (Basic Auth Traefik dans
 > Coolify par exemple) si l'URL est publique.

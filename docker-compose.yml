@@ -17,6 +17,15 @@ services:
       - YT_COOKIES_B64=${YT_COOKIES_B64:-}
       # Mot de passe demandé pour envoyer des cookies depuis la page (conseillé)
       - COOKIES_PASSWORD=${COOKIES_PASSWORD:-}
+      # Connexion automatique au compte Google : les cookies YouTube sont récupérés
+      # et rafraîchis tout seuls (compte secondaire conseillé, voir README)
+      - GOOGLE_EMAIL=${GOOGLE_EMAIL:-}
+      - GOOGLE_PASSWORD=${GOOGLE_PASSWORD:-}
+      # Secret de l'appli d'authentification si la validation en 2 étapes est active
+      - GOOGLE_TOTP_SECRET=${GOOGLE_TOTP_SECRET:-}
+      - COOKIES_REFRESH_HOURS=${COOKIES_REFRESH_HOURS:-12}
+      # Nombre d'installations en parallèle (les suivantes attendent leur tour)
+      - MAX_PARALLEL=${MAX_PARALLEL:-2}
       # Propriétaire des MP3 sur l'hôte (ubuntu = 1000:1000) : sinon ils seraient à root
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
@@ -25,8 +34,10 @@ services:
       # donc visibles dans Navidrome / Amperfy. Hors serveur, remplace par
       # un chemin local, ex. ./download:/app/download
       - /srv/media/music/YouTube:/app/download
-      # Cookies YouTube (persistent entre les redéploiements)
+      # Cookies YouTube + profil du navigateur (persistent entre les redéploiements)
       - mp3-config:/app/config
+    # Mémoire partagée plus large pour le navigateur headless de la connexion auto
+    shm_size: "256m"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8756/')"]
