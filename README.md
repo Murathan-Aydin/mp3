@@ -59,17 +59,30 @@ Les MP3 arrivent dans le dossier **`download/`**.
 
 ---
 
-## Déploiement serveur (Docker / Coolify)
+## Déploiement serveur (Coolify)
+
+1. **New Resource → Repository GitHub** `Murathan-Aydin/mp3`, branche `main`.
+2. **Build Pack : Docker Compose**
+   - Base Directory : `/app`
+   - Docker Compose Location : `/docker-compose.yml`
+3. **Domaine** du service `mp3downloader` : `https://mp3.ton-domaine.fr:8756`
+   (le `:8756` indique au proxy le port interne ; il n'apparaît pas dans l'URL publique).
+4. **Cookies YouTube** : sur un serveur, YouTube demande souvent une authentification
+   (« confirm you're not a bot »). Exporte tes cookies depuis ton navigateur (extension
+   « Get cookies.txt LOCALLY », connecté sur youtube.com), puis dans Coolify
+   **Storages → Add → File Mount** vers `/app/cookies.txt` avec ce contenu.
+5. **Deploy**. Les MP3 sont conservés dans le volume `mp3-downloads`.
+
+> ⚠️ L'interface n'a pas d'authentification : protège-la (Basic Auth Traefik dans
+> Coolify par exemple) si l'URL est publique.
+
+En Docker local (hors Coolify), remplace `expose` par `ports: ["8756:8756"]` dans
+`app/docker-compose.yml`, puis :
 
 ```bash
 cd app
 docker compose up -d --build
 ```
-
-Sur un serveur, YouTube demande souvent une authentification (« confirm you're not a
-bot »). Ajoute un fichier **cookies YouTube** : sur Coolify, crée un *File Mount* vers
-`/app/cookies.txt` avec le contenu exporté depuis ton navigateur
-(extension « Get cookies.txt LOCALLY »).
 
 ---
 
