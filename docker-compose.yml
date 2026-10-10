@@ -11,14 +11,15 @@ services:
       - HOST=0.0.0.0
       - PORT=8756
       - DOWNLOAD_DIR=/app/download
-      - COOKIES_FILE=/app/cookies.txt
+      - COOKIES_FILE=/app/config/cookies.txt
+      # Cookies YouTube encodés en base64 (voir README) : à renseigner dans
+      # Coolify > Environment Variables. Écrits dans COOKIES_FILE au démarrage.
+      - YT_COOKIES_B64=${YT_COOKIES_B64:-}
     volumes:
       # Les MP3 téléchargés persistent hors du conteneur
       - mp3-downloads:/app/download
-      # Cookies YouTube : sur Coolify, ajoute plutôt un "File Mount" (Storages)
-      # vers /app/cookies.txt avec le contenu de tes cookies (voir README).
-      # En local, décommente la ligne suivante et place un cookies.txt à côté :
-      # - ./cookies.txt:/app/cookies.txt:ro
+      # Cookies YouTube (persistent entre les redéploiements)
+      - mp3-config:/app/config
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8756/')"]
@@ -29,3 +30,4 @@ services:
 
 volumes:
   mp3-downloads:
+  mp3-config:

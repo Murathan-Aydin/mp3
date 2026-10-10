@@ -9,6 +9,7 @@ Colle un ou plusieurs liens (séparés par ; , espace, retour à la ligne, "ou"�
 clique sur « Installer ». Playlist -> tout est téléchargé ; musique seule -> juste elle.
 Les MP3 arrivent dans ./download, et un ZIP de la session est proposé au téléchargement.
 """
+import base64
 import http.server
 import socketserver
 import os
@@ -330,6 +331,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         cookies = os.environ.get("COOKIES_FILE", "")
         if cookies and os.path.isfile(cookies):
             cmd += ["--cookies", cookies]
+            cookies_msg = f"🍪 Cookies utilisés : {cookies}\n"
+        else:
+            cookies_msg = "⚠️ Aucun cookies.txt trouvé : YouTube risque de bloquer (voir README)\n"
         cmd += urls
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -353,6 +357,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             send(f"##PROG##{done}|{total}|{int(cur_pct)}|{name}\n")
 
         try:
+            send(cookies_msg)
             for out_line in iter(proc.stdout.readline, ""):
                 out_line = out_line.rstrip("\n")
 
@@ -423,6 +428,23 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
 
 
+def install_cookies_from_env():
+    """Coolify : YT_COOKIES_B64 (cookies.txt encodé en base64) -> écrit dans COOKIES_FILE."""
+    b64 = os.environ.get("YT_COOKIES_B64", "").strip()
+    path = os.environ.get("COOKIES_FILE", "")
+    if not b64 or not path:
+        return
+    try:
+        data = base64.b64decode(b64, validate=True)
+    except Exception as e:
+        print(f"  ⚠️  YT_COOKIES_B64 invalide (base64 attendu) : {e}", flush=True)
+        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(data)
+    print(f"  🍪 Cookies installés depuis YT_COOKIES_B64 -> {path}", flush=True)
+
+
 def start_server():
     """Démarre le serveur ; si le port est occupé, en essaie un autre au lieu de planter."""
     last_err = None
@@ -438,6 +460,7 @@ def start_server():
 
 if __name__ == "__main__":
     os.makedirs(DEST, exist_ok=True)
+    install_cookies_from_env()
     httpd, port = start_server()
     url = f"http://localhost:{port}"
     print(f"\n  🎵 MP3 Downloader lancé sur  {HOST}:{port}")

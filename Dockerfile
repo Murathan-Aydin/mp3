@@ -17,9 +17,9 @@ COPY app/app.py .
 ENV HOST=0.0.0.0 \
     PORT=8756 \
     DOWNLOAD_DIR=/app/download \
-    COOKIES_FILE=/app/cookies.txt
+    COOKIES_FILE=/app/config/cookies.txt
 
-RUN mkdir -p /app/download
+RUN mkdir -p /app/download /app/config
 EXPOSE 8756
 
 CMD ["python3", "app.py"]
